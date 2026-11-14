@@ -1,162 +1,156 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 
-import { downloadEntries, listEntries, moduleMeta, runAction as applyAction } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import { useQueryEngine } from './domain/engine'
+import type { ExecutionBatch, QueryStatement, StatementDraft } from './domain/types'
+import OverviewTab from './components/OverviewTab'
+import StatementsTab from './components/StatementsTab'
+import StatementDetail from './components/StatementDetail'
+import BatchDetail from './components/BatchDetail'
+import ReportPanel from './components/ReportPanel'
+import StatementForm from './components/StatementForm'
 
-const meta = moduleMeta('query')
-const columns = [
-  "语句编号",
-  "查询表达式",
-  "目标数据集",
-  "返回字段",
-  "排序条件",
-  "分页大小",
-  "最大行数",
-  "超时秒数"
-]
-const actions = [
-  "提交执行",
-  "启动查询",
-  "终止查询",
-  "保存结果"
-]
-const statuses = [
-  "草稿",
-  "待执行",
-  "执行中",
-  "已完成",
-  "已超时"
-]
-const stats = [
-  {
-    "label": "查询语句总数",
-    "value": 0
-  },
-  {
-    "label": "已完成查询",
-    "value": 0
-  },
-  {
-    "label": "执行中查询",
-    "value": 0
-  }
+type TabKey = 'overview' | 'statements' | 'reports'
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'overview', label: '批次概览（按时间）' },
+  { key: 'statements', label: '查询语句与历史快照' },
+  { key: 'reports', label: '报表引用' },
 ]
 
 export default function QueryView() {
-  const [rows, setRows] = useState<EntryRow[]>([])
-  const [total, setTotal] = useState(0)
-  const [errorMessage, setErrorMessage] = useState('')
-  const [filters, setFilters] = useState<Record<string, string>>({})
-  const filterFields = useMemo(() => columns.slice(0, 3), [])
+  const engine = useQueryEngine()
+  const { state } = engine
+  const [tab, setTab] = useState<TabKey>('overview')
+  const [showForm, setShowForm] = useState(false)
+  const [activeStatementId, setActiveStatementId] = useState<string | null>(null)
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null)
+  const [operator] = useState('值班管理员')
+  const [notice, setNotice] = useState('')
 
-  const reload = useCallback(() => {
-    setErrorMessage('')
-    try {
-      const payload = listEntries(meta.key, filters)
-      setRows(payload.items)
-      setTotal(payload.total)
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '交互查询列表读取失败')
-    }
-  }, [filters])
+  const activeStatement: QueryStatement | null =
+    state.statements.find((item) => item.id === activeStatementId) ?? null
+  const statementBatches = state.batches.filter((batch) => batch.statementId === activeStatementId)
+  const activeBatch: ExecutionBatch | null =
+    state.batches.find((item) => item.id === activeBatchId) ?? null
+  const activeBatchStatement: QueryStatement | null = activeBatch
+    ? state.statements.find((item) => item.id === activeBatch.statementId) ?? null
+    : null
 
-  useEffect(() => {
-    reload()
-  }, [reload])
+  function openStatement(statement: QueryStatement) {
+    setActiveStatementId(statement.id)
+    setNotice('')
+  }
 
-  function runAction(action: string, row: EntryRow) {
-    setErrorMessage('')
-    const result = applyAction(meta.key, Number(row.id), action)
-    if (!result.ok) {
-      setErrorMessage(result.message)
-      return
-    }
-    reload()
+  function openBatch(batch: ExecutionBatch) {
+    setActiveBatchId(batch.id)
+    setNotice('')
+  }
+
+  function handleCreate(draft: StatementDraft) {
+    const created = engine.createStatement(draft)
+    setNotice(`已登记草稿 ${created.code}，尚未执行、不产生结果行数。`)
+    setTab('statements')
+  }
+
+  function handleStart(statementId: string, expectZeroRows: boolean) {
+    engine.startBatch(statementId, expectZeroRows)
+    setNotice('已创建新批次并开始扫描；批次编号顺延，旧批次与旧诊断保持不变。')
+  }
+
+  function handleClone(statementId: string) {
+    const created = engine.cloneAsNewStatement(statementId)
+    setNotice(`已复制表达式生成新语句 ${created.code}，不继承旧批次的结果行数。`)
+    setActiveStatementId(created.id)
   }
 
   return (
-    <section className="page" data-module="query">
+    <section className="page query-lab" data-module="query">
       <header className="page-head">
         <div>
-          <h2>交互查询管理</h2>
-          <p className="page-desc">维护交互查询语句的输入、执行约束与结果记录，为数据查询提供可验证的数据工程流程。</p>
+          <h2>查询执行快照与超时诊断</h2>
+          <p className="page-desc">
+            为每条查询语句留存带目标数据集的执行快照与超时诊断；报表只引用已完成快照，
+            回放与恢复不改写旧编号、旧诊断，新旧批次并列展示。
+          </p>
         </div>
         <div className="page-actions">
-          <button className="btn primary" type="button" onClick={() => setErrorMessage('查询语句登记入口尚未接入审批流')}>
-            登记查询语句
-          </button>
-          <button className="btn" type="button" onClick={() => downloadEntries(meta.key)}>
-            导出交互查询清单
+          <button type="button" className="btn" onClick={() => { engine.resetLab(); setNotice('已重置为演示数据。') }}>
+            重置演示数据
           </button>
         </div>
       </header>
 
-      <div className="stat-row">
-        {stats.map((item) => (
-          <article key={item.label} className="stat-card">
-            <span className="stat-label">{item.label}</span>
-            <strong className="stat-value">{item.value}</strong>
-          </article>
+      <nav className="tab-bar">
+        {TABS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`tab-item ${tab === item.key ? 'active' : ''}`}
+            onClick={() => setTab(item.key)}
+          >
+            {item.label}
+          </button>
         ))}
-      </div>
+      </nav>
 
-      <p className="status-legend">
-        {statuses.map((status: string) => (
-          <span key={status} className="legend-item">
-            {status}：{rows.filter((row) => String(row.status) === status).length}
-          </span>
-        ))}
-      </p>
+      {notice && <p className="inline-notice">{notice}</p>}
 
-      <form className="filter-bar" onSubmit={(event) => { event.preventDefault(); reload() }}>
-        {filterFields.map((field) => (
-          <label key={field} className="filter-item">
-            <span>{field}</span>
-            <input
-              value={filters[field] ?? ''}
-              placeholder={`按${field}检索`}
-              onChange={(event) => setFilters((prev) => ({ ...prev, [field]: event.target.value }))}
-            />
-          </label>
-        ))}
-        <button className="btn" type="submit">查询</button>
-        <button className="btn ghost" type="button" onClick={() => setFilters({})}>重置条件</button>
-      </form>
+      {tab === 'overview' && (
+        <OverviewTab
+          statements={state.statements}
+          batches={state.batches}
+          onOpenBatch={openBatch}
+        />
+      )}
 
-      <table className="data-table">
-        <thead>
-          <tr>
-            {columns.map((column) => <th key={column}>{column}</th>)}
-            <th>当前状态</th>
-            <th>可执行动作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={String(row.id)}>
-              {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
-              <td>{row.status}</td>
-              <td className="row-actions">
-                {actions.map((action) => (
-                  <button key={action} className="link" type="button" onClick={() => runAction(action, row)}>
-                    {action}
-                  </button>
-                ))}
-              </td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td className="empty-state" colSpan={columns.length + 2}>暂无交互查询数据，可先登记查询语句</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      {tab === 'statements' && (
+        <StatementsTab
+          statements={state.statements}
+          batches={state.batches}
+          onCreate={() => setShowForm(true)}
+          onOpen={openStatement}
+        />
+      )}
 
-      <footer className="page-foot">
-        <span>共 {total} 条交互查询记录</span>
-        {errorMessage && <span className="error-text">{errorMessage}</span>}
-      </footer>
+      {tab === 'reports' && (
+        <ReportPanel
+          batches={state.batches}
+          reports={state.reports}
+          onCreate={engine.createReport}
+        />
+      )}
+
+      {showForm && (
+        <StatementForm onClose={() => setShowForm(false)} onSubmit={handleCreate} />
+      )}
+
+      {activeStatement && (
+        <StatementDetail
+          statement={activeStatement}
+          batches={statementBatches}
+          operator={operator}
+          onClose={() => setActiveStatementId(null)}
+          onOpenBatch={openBatch}
+          onStart={handleStart}
+          onResume={(batchId) => { engine.resumeBatch(batchId); setNotice('已从未完成扫描段恢复，沿用原批次编号并新增一次扫描尝试。') }}
+          onTerminate={(batchId, who) => { engine.terminateBatch(batchId, who); setNotice(`已由 ${who} 手工终止，分片边界与终止人已保留。`) }}
+          onDisconnect={(batchId) => { engine.simulateDisconnect(batchId); setNotice('已模拟断线 / 请求被迫终止，可从尚未完成的扫描段恢复。') }}
+          onArchive={(id) => { engine.archiveStatement(id); setNotice('语句已归档；历史批次只读，可复制表达式重新执行。') }}
+          onClone={handleClone}
+        />
+      )}
+
+      {activeBatch && activeBatchStatement && (
+        <BatchDetail
+          batch={activeBatch}
+          statement={activeBatchStatement}
+          operator={operator}
+          onClose={() => setActiveBatchId(null)}
+          onResume={(batchId) => { engine.resumeBatch(batchId); setNotice('已恢复扫描，原诊断与原编号不变。') }}
+          onTerminate={(batchId, who) => { engine.terminateBatch(batchId, who); setNotice(`已由 ${who} 终止。`) }}
+          onDisconnect={(batchId) => { engine.simulateDisconnect(batchId); setNotice('已模拟断线。') }}
+        />
+      )}
     </section>
   )
 }

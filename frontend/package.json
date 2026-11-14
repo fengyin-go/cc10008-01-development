@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:invariants": "esbuild test/engine-invariants.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/ei.mjs && node node_modules/.cache/ei.mjs",
+    "test:lifecycle": "esbuild test/engine-lifecycle.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/el.mjs && node node_modules/.cache/el.mjs",
+    "test:smoke": "esbuild test/component-smoke.tsx --bundle --platform=node --format=cjs --loader:.tsx=tsx --jsx=automatic --outfile=node_modules/.cache/cs.cjs && node node_modules/.cache/cs.cjs",
+    "test": "npm run test:invariants && npm run test:lifecycle && npm run test:smoke"
   },
   "dependencies": {
     "react": "^18.3.1",
